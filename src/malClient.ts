@@ -5,15 +5,22 @@ const MAL_API_BASE = 'https://api.myanimelist.net/v2';
 const MAL_AUTH_URL = 'https://myanimelist.net/v1/oauth2/authorize';
 const MAL_TOKEN_URL = 'https://myanimelist.net/v1/oauth2/token';
 
-const CLIENT_ID = process.env.MAL_CLIENT_ID;
-const CLIENT_SECRET = process.env.MAL_CLIENT_SECRET;
-const REDIRECT_URI = process.env.MAL_REDIRECT_URI;
+// Remove the immediate validation - we'll validate when functions are called
+function getEnvVars() {
+  const CLIENT_ID = process.env.MAL_CLIENT_ID;
+  const CLIENT_SECRET = process.env.MAL_CLIENT_SECRET;
+  const REDIRECT_URI = process.env.MAL_REDIRECT_URI;
 
-if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
-  throw new Error('Missing required environment variables: MAL_CLIENT_ID, MAL_CLIENT_SECRET, MAL_REDIRECT_URI');
+  if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
+    throw new Error('Missing required environment variables: MAL_CLIENT_ID, MAL_CLIENT_SECRET, MAL_REDIRECT_URI');
+  }
+
+  return { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI };
 }
 
 export function generateAuthUrl(): string {
+  const { CLIENT_ID, REDIRECT_URI } = getEnvVars();
+  
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: CLIENT_ID,
@@ -27,6 +34,8 @@ export function generateAuthUrl(): string {
 
 export async function exchangeCodeForToken(code: string): Promise<MalTokenResponse> {
   try {
+    const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI } = getEnvVars();
+    
     const params = new URLSearchParams({
       client_id: CLIENT_ID,
       client_secret: CLIENT_SECRET,
