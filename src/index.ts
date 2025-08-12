@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { generateAuthUrl, exchangeCodeForToken, searchAnime, getUserAnimeList } from './malClient';
-import { MalTokenResponse } from './types';
+import { TokenManager } from './tokenManager';
 
 // Load environment variables
 dotenv.config();
@@ -10,30 +10,43 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
+// Initialize token manager
+const tokenManager = new TokenManager();
+
 // Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// In-memory token storage (replace with database in production)
-let userTokens: { [userId: string]: MalTokenResponse } = {};
-
 // Routes
 app.get('/', (req: Request, res: Response) => {
+  const users = tokenManager.listUsers();
   res.json({
     message: 'MyAnimeList Proxy API',
+    current_time: new Date().toISOString(),
+    authorized_users: users,
+    redirect_uri: process.env.MAL_REDIRECT_URI,
     endpoints: {
       '/auth': 'Start OAuth2 flow',
+      '/auth/:userId': 'Start OAuth2 flow for specific user',
       '/callback': 'OAuth2 callback',
       '/search/:query': 'Search anime (requires token)',
-      '/user/animelist': 'Get user anime list (requires token)'
+      '/search/:userId/:query': 'Search anime for specific user',
+      '/user/animelist': 'Get user anime list (requires token)',
+      '/user/:userId/animelist': 'Get anime list for specific user',
+      '/tokens': 'List all stored tokens',
+      '/tokens/:userId': 'Remove token for specific user'
     }
   });
 });
 
 app.get('/auth', (req: Request, res: Response) => {
+  res.redirect(`/auth/${req.query.userId || 'default_user'}`);
+});
+
+app.get('/auth/:userId', (req: Request, res: Response) => {
   try {
-    const authUrl = generateAuthUrl();
+    const authUrl = generateAuthUrl(req.params.userId);
     res.redirect(authUrl);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -42,62 +55,109 @@ app.get('/auth', (req: Request, res: Response) => {
 
 app.get('/callback', async (req: Request, res: Response) => {
   try {
-    const { code } = req.query;
+    const { code, state } = req.query;
 
     if (!code || typeof code !== 'string') {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
 
-    const tokens = await exchangeCodeForToken(code);
+    if (!state || typeof state !== 'string') {
+      return res.status(400).json({ error: 'State parameter is required' });
+    }
+
+    const tokens = await exchangeCodeForToken(code, state);
     
-    // Store tokens (in production, use proper user identification and secure storage)
-    const userId = 'default_user'; // Replace with actual user ID
-    userTokens[userId] = tokens;
+    tokenManager.storeToken(state, tokens);
 
     res.json({
-      message: 'Authorization successful',
+      message: 'Authorization successful! 🎉',
+      user_id: state,
       token_type: tokens.token_type,
       expires_in: tokens.expires_in,
-      // Don't expose the actual tokens in the response for security
-      access_token: '***STORED***',
-      refresh_token: '***STORED***'
+      expires_at: new Date(Date.now() + tokens.expires_in * 1000).toISOString(),
+      next_steps: {
+        search: `/search/${state}/naruto`,
+        animelist: `/user/${state}/animelist`
+      }
     });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
 });
 
+// Default search (uses default_user)
 app.get('/search/:query', async (req: Request, res: Response) => {
+  res.redirect(`/search/default_user/${req.params.query}`);
+});
+
+// Search for specific user
+app.get('/search/:userId/:query', async (req: Request, res: Response) => {
   try {
-    const { query } = req.params;
-    const userId = 'default_user'; // Replace with actual user ID
+    const { userId, query } = req.params;
     
-    const userToken = userTokens[userId];
-    if (!userToken) {
-      return res.status(401).json({ error: 'No access token found. Please authorize first via /auth' });
+    const accessToken = tokenManager.getToken(userId);
+    if (!accessToken) {
+      return res.status(401).json({ 
+        error: 'No valid access token found', 
+        action: `Visit /auth/${userId} to authorize`
+      });
     }
 
-    const results = await searchAnime(query, userToken.access_token);
-    res.json(results);
+    const results = await searchAnime(query, accessToken);
+    res.json({
+      user_id: userId,
+      query: query,
+      results: results
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
+// Default user animelist
 app.get('/user/animelist', async (req: Request, res: Response) => {
+  res.redirect('/user/default_user/animelist');
+});
+
+// Specific user animelist
+app.get('/user/:userId/animelist', async (req: Request, res: Response) => {
   try {
-    const userId = 'default_user'; // Replace with actual user ID
+    const { userId } = req.params;
     
-    const userToken = userTokens[userId];
-    if (!userToken) {
-      return res.status(401).json({ error: 'No access token found. Please authorize first via /auth' });
+    const accessToken = tokenManager.getToken(userId);
+    if (!accessToken) {
+      return res.status(401).json({ 
+        error: 'No valid access token found', 
+        action: `Visit /auth/${userId} to authorize`
+      });
     }
 
-    const animeList = await getUserAnimeList(userToken.access_token);
-    res.json(animeList);
+    const animeList = await getUserAnimeList(accessToken);
+    res.json({
+      user_id: userId,
+      anime_list: animeList
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
+});
+
+// Token management endpoints
+app.get('/tokens', (req: Request, res: Response) => {
+  const users = tokenManager.listUsers();
+  res.json({
+    message: 'Stored tokens',
+    users: users,
+    count: users.length
+  });
+});
+
+app.delete('/tokens/:userId', (req: Request, res: Response) => {
+  const { userId } = req.params;
+  tokenManager.removeToken(userId);
+  res.json({
+    message: `Token removed for user: ${userId}`
+  });
 });
 
 // Error handling middleware
@@ -115,7 +175,11 @@ app.use('*', (req: Request, res: Response) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 MAL Proxy API running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 Local: http://localhost:${PORT}/auth`);
-  console.log(`🌐 Network: http://0.0.0.0:${PORT}/auth`);
+  console.log(`🔗 Local: http://localhost:${PORT}`);
+  console.log(`🌐 Network: http://0.0.0.0:${PORT}`);
   console.log(`📡 Available on all network interfaces`);
+  console.log(`\n🎯 Quick Start:`);
+  console.log(`   1. Visit: http://localhost:${PORT}/auth/cjemorton`);
+  console.log(`   2. Authorize on MyAnimeList`);
+  console.log(`   3. Test: http://localhost:${PORT}/search/cjemorton/naruto`);
 });
