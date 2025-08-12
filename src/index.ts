@@ -2,11 +2,15 @@ import express, { Request, Response } from 'express';
 import crypto from 'crypto';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import debugPkceFlowRouter from './debug-pkce-flow';
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// Mount debug PKCE flow router
+app.use('/debug', debugPkceFlowRouter);
 
 // PKCE storage - in production, use Redis or database
 interface PKCEData {
@@ -305,6 +309,8 @@ app.get('/', (req: Request, res: Response) => {
       debug_pkce: '/debug/pkce',
       debug_env: '/debug/env',
       clear_states: '/debug/clear',
+      debug_pkce_flow: '/debug/pkce-flow',
+      debug_pkce_callback: '/debug/pkce-flow/callback',
       health: '/health'
     },
     status: 'ready'
