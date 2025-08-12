@@ -17,6 +17,16 @@ interface PKCEData {
 
 const codeVerifiers: { [state: string]: PKCEData } = {};
 
+// Debug PKCE storage - separate from main OAuth flow
+interface DebugPKCEData {
+  codeVerifier: string;
+  codeChallenge: string;
+  timestamp: number;
+  state: string;
+}
+
+const debugCodeVerifiers: { [state: string]: DebugPKCEData } = {};
+
 // Utility functions
 function base64urlEscape(str: string): string {
   return str.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
@@ -44,7 +54,203 @@ function cleanupExpiredStates(): void {
   }
 }
 
+function cleanupExpiredDebugStates(): void {
+  const now = Date.now();
+  const expiry = 10 * 60 * 1000; // 10 minutes
+  
+  for (const [state, data] of Object.entries(debugCodeVerifiers)) {
+    if (now - data.timestamp > expiry) {
+      delete debugCodeVerifiers[state];
+      console.log(`🧹 Cleaned up expired debug state: ${state}`);
+    }
+  }
+}
+
 // Routes
+
+// Debug PKCE flow endpoint
+app.get('/debug/pkce-flow', (req: Request, res: Response) => {
+  cleanupExpiredDebugStates();
+  
+  // Generate new PKCE codes
+  const codeVerifier = generateCodeVerifier();
+  const codeChallenge = generateCodeChallenge(codeVerifier);
+  const state = `debug_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  
+  // Store in debug storage
+  debugCodeVerifiers[state] = {
+    codeVerifier,
+    codeChallenge,
+    timestamp: Date.now(),
+    state
+  };
+  
+  // Generate full OAuth URL
+  const authUrl = new URL('https://myanimelist.net/v1/oauth2/authorize');
+  authUrl.searchParams.append('response_type', 'code');
+  authUrl.searchParams.append('client_id', process.env.MAL_CLIENT_ID!);
+  authUrl.searchParams.append('redirect_uri', process.env.MAL_REDIRECT_URI!);
+  authUrl.searchParams.append('state', state);
+  authUrl.searchParams.append('code_challenge', codeChallenge);
+  authUrl.searchParams.append('code_challenge_method', 'S256');
+  
+  res.json({
+    message: 'PKCE Debug Flow - New codes generated',
+    timestamp: new Date().toISOString(),
+    pkce_data: {
+      code_verifier: codeVerifier,
+      code_challenge: codeChallenge,
+      state: state,
+      code_verifier_length: codeVerifier.length,
+      code_challenge_length: codeChallenge.length,
+      expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString()
+    },
+    oauth_url: {
+      full_url: authUrl.toString(),
+      parameters: {
+        response_type: 'code',
+        client_id: process.env.MAL_CLIENT_ID,
+        redirect_uri: process.env.MAL_REDIRECT_URI,
+        state: state,
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256'
+      }
+    },
+    instructions: {
+      step_1: 'Copy the full_url above and open it in your browser',
+      step_2: 'Authorize the application on MyAnimeList',
+      step_3: 'You will be redirected to the callback URL with code and state parameters',
+      step_4: 'Use the callback endpoint: GET /debug/pkce-flow/callback?code=XXXXX&state=' + state,
+      step_5: 'The callback will show the token exchange process and response',
+      note: 'This debug flow is separate from the main OAuth flow and expires in 10 minutes'
+    },
+    current_debug_states: Object.keys(debugCodeVerifiers).length
+  });
+});
+
+// Debug PKCE callback endpoint
+app.get('/debug/pkce-flow/callback', async (req: Request, res: Response) => {
+  cleanupExpiredDebugStates();
+  
+  const { code, state, error } = req.query;
+  
+  const debugInfo = {
+    timestamp: new Date().toISOString(),
+    received_parameters: {
+      code: code ? `${String(code).substring(0, 20)}...` : null,
+      state: state,
+      error: error || null
+    }
+  };
+  
+  if (error) {
+    return res.json({
+      message: 'OAuth authorization failed',
+      debug_info: debugInfo,
+      error_details: error,
+      troubleshooting: 'Check the OAuth authorization or try generating new codes at /debug/pkce-flow'
+    });
+  }
+  
+  if (!code || !state) {
+    return res.json({
+      message: 'Missing required parameters',
+      debug_info: debugInfo,
+      error_details: 'Both code and state parameters are required',
+      available_debug_states: Object.keys(debugCodeVerifiers),
+      troubleshooting: 'Generate new codes at /debug/pkce-flow'
+    });
+  }
+  
+  const debugPkceData = debugCodeVerifiers[state as string];
+  
+  if (!debugPkceData) {
+    return res.json({
+      message: 'Invalid or expired debug state',
+      debug_info: debugInfo,
+      error_details: `No debug PKCE data found for state: ${state}`,
+      available_debug_states: Object.keys(debugCodeVerifiers),
+      troubleshooting: 'Generate new codes at /debug/pkce-flow (debug states expire after 10 minutes)'
+    });
+  }
+  
+  // Prepare token exchange request
+  const tokenRequestBody = {
+    grant_type: 'authorization_code',
+    code: code as string,
+    redirect_uri: process.env.MAL_REDIRECT_URI!,
+    client_id: process.env.MAL_CLIENT_ID!,
+    client_secret: process.env.MAL_CLIENT_SECRET!,
+    code_verifier: debugPkceData.codeVerifier
+  };
+  
+  try {
+    const tokenResponse = await axios.post(
+      'https://myanimelist.net/v1/oauth2/token',
+      new URLSearchParams(tokenRequestBody),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      }
+    );
+    
+    // Clean up used debug state
+    delete debugCodeVerifiers[state as string];
+    
+    res.json({
+      message: 'Token exchange successful',
+      debug_info: debugInfo,
+      token_request: {
+        url: 'https://myanimelist.net/v1/oauth2/token',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: tokenRequestBody
+      },
+      token_response: {
+        status: tokenResponse.status,
+        statusText: tokenResponse.statusText,
+        headers: tokenResponse.headers,
+        data: tokenResponse.data
+      },
+      pkce_data_used: {
+        code_verifier: debugPkceData.codeVerifier,
+        code_challenge: debugPkceData.codeChallenge,
+        state: debugPkceData.state,
+        age_minutes: Math.round((Date.now() - debugPkceData.timestamp) / (1000 * 60))
+      }
+    });
+    
+  } catch (error: any) {
+    res.json({
+      message: 'Token exchange failed',
+      debug_info: debugInfo,
+      token_request: {
+        url: 'https://myanimelist.net/v1/oauth2/token',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: tokenRequestBody
+      },
+      error_response: {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        headers: error.response?.headers,
+        data: error.response?.data || error.message
+      },
+      pkce_data_used: {
+        code_verifier: debugPkceData.codeVerifier,
+        code_challenge: debugPkceData.codeChallenge,
+        state: debugPkceData.state,
+        age_minutes: Math.round((Date.now() - debugPkceData.timestamp) / (1000 * 60))
+      },
+      troubleshooting: 'Check the error_response for details from MyAnimeList API'
+    });
+  }
+});
 
 // Enhanced debug endpoint
 app.get('/debug/pkce', (req: Request, res: Response) => {
@@ -302,6 +508,8 @@ app.get('/', (req: Request, res: Response) => {
     endpoints: {
       start_oauth: '/auth/cjemorton',
       oauth_callback: '/callback',
+      debug_pkce_flow: '/debug/pkce-flow',
+      debug_pkce_callback: '/debug/pkce-flow/callback',
       debug_pkce: '/debug/pkce',
       debug_env: '/debug/env',
       clear_states: '/debug/clear',
@@ -316,5 +524,6 @@ app.listen(port, () => {
   console.log(`📍 Server URL: http://mal.mrnet.work:${port}`);
   console.log(`🔗 Start OAuth: http://mal.mrnet.work:${port}/auth/cjemorton`);
   console.log(`🐛 Debug PKCE: http://mal.mrnet.work:${port}/debug/pkce`);
+  console.log(`🔬 Debug PKCE Flow: http://mal.mrnet.work:${port}/debug/pkce-flow`);
   console.log(`⚙️  Debug Env: http://mal.mrnet.work:${port}/debug/env`);
 });
