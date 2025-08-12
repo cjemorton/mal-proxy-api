@@ -18,18 +18,12 @@ interface PKCEData {
 const codeVerifiers: { [state: string]: PKCEData } = {};
 
 // Utility functions
-function base64urlEscape(str: string): string {
-  return str.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
 function generateCodeVerifier(): string {
-  return base64urlEscape(crypto.randomBytes(32).toString('base64'));
+  return crypto.randomBytes(32).toString('base64url');
 }
 
 function generateCodeChallenge(codeVerifier: string): string {
-  return base64urlEscape(
-    crypto.createHash('sha256').update(codeVerifier).digest('base64')
-  );
+  return crypto.createHash('sha256').update(codeVerifier).digest('base64url');
 }
 
 function cleanupExpiredStates(): void {
