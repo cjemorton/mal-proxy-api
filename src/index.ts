@@ -1,6 +1,6 @@
 import express from "express";
 import dotenv from "dotenv";
-import { malAuthUrl, handleOAuthCallback, proxyMalRequest } from "./malClient";
+import { malAuthUrl, handleOAuthCallback, proxyMalRequest } from "./malClient.js";
 
 dotenv.config();
 
@@ -8,7 +8,7 @@ const app = express();
 app.use(express.json());
 
 // Redirect to MyAnimeList OAuth2 authorization
-app.get("/auth", (req, res) => {
+app.get("/auth", (_req, res) => {
   res.redirect(malAuthUrl());
 });
 
@@ -19,7 +19,7 @@ app.get("/callback", async (req, res) => {
     const tokens = await handleOAuthCallback(code);
     // Save tokens securely in your production app
     res.json(tokens);
-  } catch (err) {
+  } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
@@ -30,12 +30,12 @@ app.get("/mal/:endpoint", async (req, res) => {
     const endpoint = req.params.endpoint;
     const result = await proxyMalRequest(endpoint, req.query);
     res.json(result);
-  } catch (err) {
+  } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 app.listen(PORT, () => {
   console.log(`API listening on port ${PORT}`);
 });
