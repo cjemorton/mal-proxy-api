@@ -111,8 +111,11 @@ app.use('*', (req: Request, res: Response) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
-app.listen(PORT, () => {
+// Listen on all IP addresses (0.0.0.0)
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 MAL Proxy API running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🔗 Auth URL: http://localhost:${PORT}/auth`);
+  console.log(`🔗 Local: http://localhost:${PORT}/auth`);
+  console.log(`🌐 Network: http://0.0.0.0:${PORT}/auth`);
+  console.log(`📡 Available on all network interfaces`);
 });
